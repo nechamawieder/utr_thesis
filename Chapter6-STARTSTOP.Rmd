@@ -1,0 +1,860 @@
+---
+title: "Untitled"
+author: "Nechama Wieder"
+date: "2024-06-20"
+output: html_document
+---
+
+##contents##
+#1. how often do start-stops occur in mane 5'utrs
+#2. A) shuffle start-stops mane 5'utrs
+    B) shuffle reverse strand start-stops
+    C) shuffle start-stops across LEOUF
+#3. start-stop variants in clinvar
+#4. start-stop variants in GEL
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(data.table)
+library(magrittr)
+library(stringi)
+library(stringr)
+library(dplyr)
+```
+
+#1. how often do start-stops occur in mane 5'utrs
+```{r}
+uoss <- read.table("uo_ss_12.12.22.txt")
+
+ss <- uoss %>% filter(orf_type=="start-stop")
+
+#aggregate per gene
+ss2 <- ss %>% group_by(transcript) %>% summarise(n())
+ss3 <- data.frame(table(ss2$`n()`))
+ss3$total <-nrow(ss2)
+ss3$perc <- (ss3$Freq/ss3$total) *100
+#plot of those genes that have a ss, how many in each utr
+ggplot(ss3, aes(x=Var1, y=perc)) + geom_bar(stat="identity", width = 0.6) + theme_light() + xlab("Start-Stop Number per Gene") + ylab("Percentage of Genes") +ylim(0,100) + theme(text = element_text(size = 20))
+
+
+
+```
+
+#2. A) shuffle start-stops mane 5'utrs
+```{r}
+    ###### A) shuffle start-stops mane 5'utrs #####
+
+#observed start-stops in mane 5utrs#
+seq <- read.table("5utr_seqs.txt") #in unshuffled normal mane 5utr seqs 
+cod <- read.table("codons.txt")
+codons<- cod$Codon
+# 3-mer codons in all mane 5utr seqs
+
+seq2 <- data.frame(sapply(codons, function(x) str_count(seq$seq, fixed(x))))
+
+#modify to retain ensgid
+seq3 <- cbind(seq[, "ensgid", drop = FALSE], data.frame(sapply(codons, function(x) str_count(seq$seq, fixed(x)))))
+
+#write.table(seq3, "seq3.txt")
+
+seq3 <- read.table("seq3.txt")
+
+obs_cod <-  data.frame(colMeans(seq2))
+
+#this also works
+#obs_cod <- seq4 %>% summarise_all(mean) %>%  t() %>%  data.frame()
+obs_cod$codon <- rownames(obs_cod)
+
+names(obs_cod)[1]<-"observed"
+
+
+##expected start-stop codons#
+
+#count occurance of each codon in each sequence
+#aggregate and divide by 1000 to get mean codon per gene
+#calculate CI then plot
+
+
+
+#from elston
+library(data.table)
+library(magrittr)
+library(stringi)
+library(stringr)
+library(dplyr)
+
+options(datatable.verbose = TRUE)
+
+dt <- fread("sim142.combined.txt.gz") #shuffled sequences done by Fred Lassen - https://github.com/frhl/shuffle_utrs
+
+#(run in terminal)
+
+# Create codons
+nt <- c("A", "G", "T", "C")
+combinations <- expand.grid(nt, nt, nt)
+codons <- unlist(as.list(apply(combinations, 1, paste, collapse="")))
+
+count_codons <- function(seqsim, codons) {
+  freq <- stri_count_fixed(seqsim, pattern = codons)
+  names(freq) <- codons
+  return (as.list(freq))
+}
+# apply the function to each row of the data.table using mapply
+dt[, id := .I]
+dt[, (codons) := count_codons(seqsim, codons), by = id]
+
+
+#aggregate
+dt2 <- subset(dt, select=-c(seqsim))
+dt3 <- dt2 %>% group_by(ensgid) %>% summarise_each()
+
+#or
+clpsd_dt <- dt[, lapply(.SD, sum), .SDcols = codons, by = ensgid]
+
+#(bring back to R)
+shuf_cod <- read.table("shuf_codon.txt")
+
+#aggregated counts of each codon per gene
+#DELETE id col
+shuf_cod <- subset(shuf_cod, select=-c(id))
+
+#divide everything by 1000 to get a mean codon score per gene
+shuf_cod2 <- shuf_cod %>% mutate_at(vars(-ensgid), ~./1000)
+
+#write.table(shuf_cod2, "shuf_cod2.txt")
+
+shuf_cod2 <- read.table("/Users/nwieder/OneDrive - Nexus365/NWIEDER DPhil Projects/1_5'UTR_summary_stats/MANE Analysis/5' UTR analysis/shuffle/shuf_cod2.txt")
+
+
+### o/e ####
+
+#calculate o/e for each gene
+#seq3
+#shuf_cod2
+
+#transpose tables
+#library(data.table)
+obs_counts <- melt(as.data.table(seq3), id.vars=c("ensgid"), 
+    variable.name="codons", 
+    value.name="obs_count")
+
+exp_counts <- melt(as.data.table(shuf_cod2), id.vars=c("ensgid"), 
+    variable.name="codons", 
+    value.name="exp_count")
+
+
+# Merge the two dataframes
+oe <- obs_counts %>% right_join(exp_counts, by=c("ensgid", "codons"))
+
+#calcualte o/e
+oe$oe <- oe$obs_count/oe$exp_count
+
+#this is oe per gene per codon. can get a mean oe per codon across all genes
+oe_cod <- oe %>% group_by(codons) %>% summarize(mean_oe = mean(oe,na.rm = TRUE))
+
+#plot
+ggplot(oe_cod, aes(x=reorder(codons, mean_oe), y=mean_oe))+geom_point() + theme(axis.text.x = element_text(angle = 90)) 
+#looks good
+
+
+#now get error bars
+#summary_oe <- oe[, .(
+    median_oe= median(oe, na.rm = TRUE), 
+    lower_ci= quantile(oe, prob=0.025, na.rm = TRUE),
+    upper_ci= quantile(oe, prob=0.975, na.rm = TRUE)
+), by=.(codons)]
+
+#ggplot(summary_oe, aes(x=reorder(codons, median_oe), y=median_oe))+geom_point()+geom_errorbar(width=.1, aes(ymin=lower_ci, ymax=upper_ci)) + geom_hline(yintercept=1, linetype = "dotted") +  theme_light() + xlab("Hexamer") + ylab("O/E") + theme(axis.text.x = element_text(angle = 90)) 
+
+
+
+ggplot(mean_oe2, aes(x=reorder(codons, mean_oe), y=mean_oe))+geom_point()+geom_errorbar(width=.1, aes(ymin=mean_oe-sem_o_e, ymax=mean_oe+sem_o_e)) + geom_hline(yintercept=1, linetype = "dotted") +  theme_light() + xlab("Triplet") + ylab("observed/expected (o/e)") + theme(axis.text.x = element_text(angle = 90))   + theme(text = element_text(size = 20))
+
+#ATG in different colour? 
+#add that ATG = red
+
+mean_oe2$group <- ifelse(mean_oe2$codons=="ATG", "ATG", "other")
+
+ggplot(mean_oe2, aes(x = reorder(codons, mean_oe), y = mean_oe, color = group)) +
+  geom_point() +
+  geom_errorbar(width = 0.1, aes(ymin = mean_oe - sem_o_e, ymax = mean_oe + sem_o_e)) +
+  geom_hline(yintercept = 1, linetype = "dotted") +
+  theme_light() +
+  xlab("Triplet") +
+  ylab("observed/expected (o/e)") +
+  theme(axis.text.x = element_text(angle = 90)) +
+  theme(text = element_text(size = 15)) +
+  scale_color_manual(values = c("red", "black")) +
+  guides(color = FALSE) # This line removes the color legend
+
+#not colouring the actual ATG. in ppt i will add an arrow or box, this is going to have to be good enough
+
+
+    ####### B) shuffle reverse strand start-stops  ######
+
+#aggregate total number of hex counts across all genes, so you get 64,000 for each iteration
+
+#1. observed
+
+seq <- read.table("5utr_seqs.txt")
+dt <- as.data.table(seq)
+# Create codons
+nt <- c("A", "G", "T", "C")
+combinations <- expand.grid(nt, nt, nt)
+codons <- unlist(as.list(apply(combinations, 1, paste, collapse="")))
+codons <- c(codons, paste0(codons, "CAT")) 
+
+library(stringi)
+count_codons <- function(seq, codons) {
+  freq <- stri_count_fixed(seq, pattern = codons)
+  names(freq) <- codons
+  return (as.list(freq))
+}
+
+
+# apply the function to each row of the data.table 
+dt[, id := .I]
+dt[, (codons) := count_codons(seq, codons), by = id]
+clpsd_dt <- dt[, lapply(.SD, sum), .SDcols = codons, by = ensgid]
+obs_hex <- subset(clpsd_dt, select=-c(2:65))
+
+#this is 18764, so each gene with all 64 hexamers counts
+
+
+#get obs hex dt ready 
+obs_long2 <- as.data.table(obs_hex)
+obs_long <- melt(obs_long2, id.vars=c("ensgid"), variable.name="hexamer", value.name="obs_count")
+#1200869
+#each utr with row for each 64 hex
+#write.table(obs_long, "obs_long_rev.txt")
+
+#now want the count of each hex across all genes
+
+obs2 <- obs_long %>% group_by(hexamer) %>% summarise(obs_count=sum(obs_count)) #64 - this is total counts across all genes.
+#so now i have total number the reverse hex appears across all genes 5'utrs in the unshuffled normal mane sequences
+
+#2. EXPECTED
+
+exp_rev <- read.table("rev_hex_CAT.txt", header=TRUE, sep = ",")
+
+exp_rev <- as.data.table(exp_rev)
+
+exp_rev[, id:=NULL]
+
+# Convert to long format
+sims <- melt(exp_rev, id.vars=c("ensgid"), 
+    variable.name="hexamer", 
+    value.name="count")
+
+# Create an identifier for each simulation
+sims[, sim_id:= (1:nrow(.SD)), by=.(ensgid, hexamer)]
+
+# Create expected counts per each simulation
+exp_counts_per_sim <- sims[, .(exp_count= sum(count)), by=.(hexamer, sim_id)]
+#no need to divide by 1000
+
+#write.table(exp_counts_per_sim, "exp_counts_revhex.txt")
+
+#3. o/e
+
+#now can get an o/e per hex per simulation effectively
+obs2 <- as.data.table(obs2)
+setkey(obs2, hexamer)
+setkey(exp_counts_per_sim, hexamer)
+
+# Merge the two dataframes
+oe_dt <- obs2[exp_counts_per_sim]
+
+# Calculate the O/E
+oe_dt[, oe:= obs_count/exp_count]
+
+summary_oe_dt <- oe_dt[, .(
+    median_oe= median(oe, na.rm = TRUE), 
+    lower_ci= quantile(oe, prob=0.025, na.rm = TRUE),
+    upper_ci= quantile(oe, prob=0.975, na.rm = TRUE)
+), by=.(hexamer)]
+
+#write.table(summary_oe_dt, "revhexplot.txt")
+
+summary_oe_dt <- read.table("revhexplot.txt")
+
+library(ggplot2)
+ ggplot(summary_oe_dt, aes(x=reorder(hexamer, median_oe), y=median_oe))+geom_point()+geom_errorbar(width=.1, aes(ymin=lower_ci, ymax=upper_ci)) + geom_hline(yintercept=1, linetype = "dotted") +  theme_light() + xlab("Hexamer") + ylab("O/E") + theme(axis.text.x = element_text(angle = 90)) 
+ 
+#the 3 start stops on reverse are
+
+#TCACAT 1.197059
+#CTACAT  1.242857
+#TTACAT  1.484694
+
+#colour those
+ 
+#to colour the start stops points in red:
+
+summary_oe_dt$group <-"other"
+
+for(p in 1:nrow(summary_oe_dt)){
+  if (summary_oe_dt$hexamer[p] == "TCACAT"){
+    summary_oe_dt$group[p] <- (summary_oe_dt$group[p] <- "ss")
+  }
+}
+
+for(p in 1:nrow(summary_oe_dt)){
+  if (summary_oe_dt$hexamer[p] == "CTACAT"){
+    summary_oe_dt$group[p] <- (summary_oe_dt$group[p] <- "ss")
+  }
+}
+
+for(p in 1:nrow(summary_oe_dt)){
+  if (summary_oe_dt$hexamer[p] == "TTACAT"){
+    summary_oe_dt$group[p] <- (summary_oe_dt$group[p] <- "ss")
+  }
+}
+
+ggplot(summary_oe_dt, aes(x=reorder(hexamer, median_oe), y=median_oe, color=group))+geom_point()+geom_errorbar(width=.1, aes(ymin=lower_ci, ymax=upper_ci)) +scale_colour_manual(values = c("other" = "black", "ss" = "red"))+ geom_hline(yintercept=1, linetype = "dotted") +  theme_light() + xlab("Reverse Hexamer") + ylab("O/E") + theme(axis.text.x = element_text(angle = 90)) + theme(legend.position = "none")  + theme(text = element_text(size = 10))
+ 
+ 
+ ## comapre median o/e of the rev hex to the normal hex
+#TCACAT 1.197059 (TGA)  #ATGTGA 1.491049
+#CTACAT  1.242857 (TAG) #ATGTAG 1.070796
+#TTACAT  1.484694 (TAA) #ATGTAA 1.237113
+
+
+
+    ####### C) shuffle start-stops across LEOUF  ######
+
+#shuffled bottom and top 3 leouf genes
+bot <- gn_final1 %>% filter(decile<4)
+top <- gn_final1 %>% filter(decile>7)
+bot2 <- data.frame(ensgid=bot$gene_id)
+top2 <- data.frame(ensgid=top$gene_id)
+
+######bot oe
+
+#i want genes from sims datatbale
+bot_sim <- merge(sims, bot2) 
+
+# Create expected counts per each simulation
+exp_counts_bot <- bot_sim[, .(exp_count= sum(count)), by=.(hexamer, sim_id)]
+
+
+# Calculate observed counts for bot
+obs_hex_bot <- merge(obs_hex, bot2)#not all mane genes in gnomad thats why number r diff
+
+
+obs_counts_bot <- melt(as.data.table(obs_hex_bot), id.vars=c("ensgid"), 
+    variable.name="hexamer", 
+    value.name="obs_count")
+
+# Collapse per hexamer
+obs_counts_b2 <- obs_counts_bot[, .(obs_count= sum(obs_count)), by=.(hexamer)]
+
+setkey(obs_counts_b2, hexamer)
+setkey(exp_counts_bot, hexamer)
+
+# Merge the two dataframes
+oe_bot <- obs_counts_b2[exp_counts_bot]
+
+# Calculate the O/E
+oe_bot[, oe:= obs_count/exp_count]
+#this is o/e range for bottom 3 leouf deciles
+
+
+
+summary_oe_bot <- oe_bot[, .(
+    median_oe= median(oe, na.rm = TRUE), 
+    lower_ci= quantile(oe, prob=0.025, na.rm = TRUE),
+    upper_ci= quantile(oe, prob=0.975, na.rm = TRUE)
+), by=.(hexamer)]
+
+summary_oe_bot$group <- "Low LEOUF"
+
+
+########top oe
+top_sim <- merge(sims, top2) 
+#Warning message:
+#In doTryCatch(return(expr), name, parentenv, handler) :
+  #restarting interrupted promise evaluation
+#dont no what this is
+
+# Create expected counts per each simulation
+exp_counts_top <- top_sim[, .(exp_count= sum(count)), by=.(hexamer, sim_id)]
+
+
+# Calculate observed counts for top
+obs_hex_top <- merge(obs_hex, top2)#not all mane genes in gnomad thats why number r diff
+
+
+obs_counts_top <- melt(as.data.table(obs_hex_top), id.vars=c("ensgid"), 
+    variable.name="hexamer", 
+    value.name="obs_count")
+
+# Collapse per hexamer
+obs_counts_t2 <- obs_counts_top[, .(obs_count= sum(obs_count)), by=.(hexamer)]
+
+setkey(obs_counts_t2, hexamer)
+setkey(exp_counts_top, hexamer)
+
+# Merge the two dataframes
+oe_top <- obs_counts_t2[exp_counts_top]
+
+# Calculate the O/E
+oe_top[, oe:= obs_count/exp_count]
+
+
+summary_oe_top <- oe_top[, .(
+    median_oe= median(oe, na.rm = TRUE), 
+    lower_ci= quantile(oe, prob=0.025, na.rm = TRUE),
+    upper_ci= quantile(oe, prob=0.975, na.rm = TRUE)
+), by=.(hexamer)]
+
+summary_oe_top$group <- "High LEOUF"
+
+
+
+#plot them
+oe_loeuf <- rbind(summary_oe_bot, summary_oe_top)
+
+#write.table(oe_loeuf, "oe_leouf.txt")
+
+library(ggplot2)
+
+#plot top just to see
+ ggplot(summary_oe_top, aes(x=reorder(hexamer, median_oe), y=median_oe))+geom_point()+geom_errorbar(width=.1, aes(ymin=lower_ci, ymax=upper_ci)) + geom_hline(yintercept=1, linetype = "dotted") + theme(axis.text.x = element_text(angle = 90)) 
+
+#facet plot 
+ggplot(oe_loeuf, aes(x=reorder(hexamer, median_oe), y=median_oe, color = group))+geom_point()+ facet_grid(group ~ .) +  geom_errorbar(width=.1, aes(ymin=lower_ci, ymax=upper_ci)) + geom_hline(yintercept=1, linetype = "dotted") +  theme_light() + xlab("Hexamer") + ylab("O/E") + theme(axis.text.x = element_text(angle = 90))  + theme(legend.position = "none")
+ #get rid of legend
+
+#facet plot iwth ss highlighted
+
+oe_loeuf$hex_type<-"other"
+
+for(p in 1:nrow(oe_loeuf)){
+  if (oe_loeuf$hexamer[p] == "ATGTAG"){
+    oe_loeuf$hex_type[p] <- (oe_loeuf$hex_type[p] <- "ss")
+  }
+}
+
+for(p in 1:nrow(oe_loeuf)){
+  if (oe_loeuf$hexamer[p] == "ATGTAA"){
+    oe_loeuf$hex_type[p] <- (oe_loeuf$hex_type[p] <- "ss")
+  }
+}
+
+for(p in 1:nrow(oe_loeuf)){
+  if (oe_loeuf$hexamer[p] == "ATGTGA"){
+    oe_loeuf$hex_type[p] <- (oe_loeuf$hex_type[p] <- "ss")
+  }
+}
+
+
+
+ggplot(oe_loeuf, aes(x=reorder(hexamer, median_oe), y=median_oe, color = hex_type))+geom_point()+ facet_grid(group ~ .) +  geom_errorbar(width=.1, aes(ymin=lower_ci, ymax=upper_ci)) + geom_hline(yintercept=1, linetype = "dotted") +  theme_light() + xlab("Hexamer") + ylab("O/E") +scale_colour_manual(values = c("other" = "black", "ss" = "red")) + theme(strip.text = element_text(colour = 'white', size = '15', face="bold")) + theme(axis.text.x = element_text(angle = 90))  + theme(legend.position = "none")
+
+#renamed facet legends in ppt for thesis
+
+```
+
+#3. start-stop variants in clinvar
+```{r}
+###1. utr annotator on clinvar variants
+#running utr annotator on clinvar variants - done by Elston D'Souza
+
+#5’UTR variants from ClinVar were downloaded from the FTP server (https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/weekly/) (27 May 2023). Removed mitochondrial variants, canonical chromosomes, constrained to 5’UTR regions according to MANE v1.0 5’UTR regions. The VEP UTRannotator was run on the BMRC using Tabix. Downloading ClinVar variants and running UTRannotator was done by Elston N. D'Souza.
+
+
+bcftools query -f $query_string $output_vcf >> $output_file
+##INFO=<ID=CLNDN,Number=.,Type=String,Description=“ClinVar’s preferred disease name for the concept specified by disease identifiers in CLNDISDB”>
+##INFO=<ID=CLNREVSTAT,Number=.,Type=String,Description=“ClinVar review status of germline classification for the Variation ID”>
+##INFO=<ID=CLNSIG,Number=.,Type=String,Description=“Aggregate germline classification for this single variant; multiple values are separated by a vertical bar”>
+##INFO=<ID=CLNSIGINCL,Number=.,Type=String,Description=“Germline classification for a haplotype or genotype that includes this variant. Reported as pairs of VariationID:classification; multiple values are separated by a vertical bar”>
+##INFO=<ID=CLNVC,Number=1,Type=String,Description=“Variant type”>
+##INFO=<ID=CLNHGVS,Number=.,Type=String,Description=“Top-level (primary assembly, alt, or patch) HGVS expression.“>
+##INFO=<ID=CLNVI,Number=.,Type=String,Description=“the variant’s clinical sources reported as tag-value pairs of database and variant identifier”>
+
+
+# The following script subsets tabix on the
+# BMRC using the bed file using tabix
+
+module load BCFtools
+CADD_INPATH='/well/whiffin/projects/cadd'
+REGIONS_FILE='/well/whiffin/users/wdf915/Projects/VuTR/data/pipeline'
+CLINVAR_DATA_PATH='/well/whiffin/users/wdf915/Projects/VuTR/data/pipeline/CLINVAR'
+VEP_CACHE='/well/whiffin/projects/vep'
+ASSEMBLY='GRCh38'
+MANE_VERSION='1.0'
+
+tabix ${CLINVAR_DATA_PATH}/clinvar.vcf.gz \
+            --regions ${REGIONS_FILE}/UTR_regions.tsv \
+            > ${CADD_OUTPUT}/clinvar_5putr.vcf
+
+
+module purge 
+module load VEP # Specify version 
+
+# Run VEP
+vep \
+    --assembly GRCh38\
+    --force_overwrite\
+    --species homo_sapiens\
+    --cache \
+    --fasta ${VEP_CACHE}/Homo_sapiens.GRCh38.dna.primary_assembly.fa\
+    --mane \
+    --mane_select \
+    --canonical \
+    --offline\
+    --tab \
+    --fork 10 \
+    --dir_cache ${VEP_CACHE} \
+    --plugin UTRannotator\
+    -i ${CLINVAR_DATA_PATH}/clinvar_5putr.vcf\
+    -o ${CLINVAR_DATA_PATH}/clinvar_5putr.annotated.txt 
+
+########################################
+
+##########assessing output - done by me NWieder########
+#https://github.com/Computational-Rare-Disease-Genomics-WHG/VuTR/tree/main/pipeline/UTR-Annotator - see here for the diff outcomes of utr annotator
+
+
+clinvar <- read.table("5putr.annotated.txt")
+#unique clinvar variants
+clin_u <- unique(clinvar$V1)#13091
+
+#bring in one of the mane files for useful things as a lookup
+mane_five <- read.table("mane_five.txt")
+
+#filter to ones which utr annotator has a consequence
+#so no "-" in V24/25?
+#note this is not necessarily pathogenic in clinvar!
+#to get the info on how many start-stops are annotated in clinvar as pathogenic need to match up the VCF clinvar file which has that data to the VEP output files with the UTR anntotator files
+
+#there are 2 categories of mutations, ones where a native start-stop is messed up, and one where a uaug creating variant makes a start stop.
+#also uaug creating variant == removing an oorf or uorf
+#start stop the stop is removed
+#slightly bigger deletion where more is removed/spliced
+#think about all these scenarions
+
+#######DEFINTIONS
+#https://github.com/Computational-Rare-Disease-Genomics-WHG/VuTR/tree/main/pipeline/UTR-Annotator
+#has definitons of utr anntoator output
+#If this 5'UTR is uORF-perturbing, the plugin will output the consequence and detailed annotation of each consequence. Otherwise it will output -
+#uAUG GAIN
+#uAUG gain: will tell u what kind it created, the distance to the stop (if it cant find a stop (it looks in utr adn cds it says na)
+#uAUG LOST
+#uAUG_lost_type	The type of 5’ UTR ORF lost, described by one of the following: uORF, inframe_oORF or OutOfFrame_oORF (i want uORF)
+#uAUG_lost_DistanceToSTOP	-	The distance (number of nucleotides) between the lost uAUG to the nearest stop codon (scanning through both the 5’UTR and its downstream CDS). Output NA if there is no stop codon.
+#uAUG_lost_evidence	:	Whether the uORF disrupted by the lost uAUG has any translation evidence. Output NA if no evidence file provided
+#uSTOP LLOST
+#uSTOP_lost_AltStop		Whether there is an alternative stop codon downstream within 5’ UTR - I think this category says if there is another stop that could like be a rescue?
+#uSTOP_lost_evidence		Whether the uORF disrupted by the lost stop codon has any translation evidence. Output NA if no evidence file provided.
+#uSTOP GAIn
+#uSTOP_gained_ref_type		The type of uORF being disrupted - any of the following: uORF, inframe_oORF,OutOfFrame_oORF
+#the details are all of ustops that disrupt an uORF. yes think about this - iu already have an ATG so adding a stop will shorten it or turn an oORF into a uORF.
+
+
+###############1. uAUG creating variant == start-stop ####
+uAUG_gain <- clinvar %>% filter(grepl("uAUG_gained", V25))#1908
+
+uAUG_gain2 <- clinvar %>% filter(grepl("uAUG_gained_DistanceToStop:3,", V24))#55
+uAUG_gain3 <- clinvar %>% filter(grepl("uAUG_gained_DistanceToStop:NA,", V24))#71
+
+
+#how do i know which variant to use? take any?
+#well if  all transcripts have the same outcome ie creating a start-stop then cna remove them?
+#in uaug2 they are all the same out come so keep only unique
+aug_gain <- uAUG_gain2 %>% distinct(V2, .keep_all = TRUE)#13
+
+#check teh NA ones if they have a stop after
+library(BSgenome)
+library("BSgenome.Hsapiens.UCSC.hg38")
+human <- getBSgenome("BSgenome.Hsapiens.UCSC.hg38")
+
+#prepare df
+aug_gain3 <- uAUG_gain3 %>% distinct(V2, .keep_all = TRUE)#28
+library(splitstackshape)
+aug_gain3 <- cSplit("V2", ":")
+#put the ranges one sep
+aug_gain3_1 <- aug_gain3 %>% filter(!grepl("-", V2_2))
+
+aug_gain3_1$V2_1 <- paste0("chr", V2_1)
+aug_gain3_1$V2_2 <- as.character(aug_gain3_1$V2_2)
+aug_gain3_1$V2_2 <- as.numeric(aug_gain3_1$V2_2)
+aug_gain3_1$start <- aug_gain3_1$V2_2 -5
+aug_gain3_1$end <- aug_gain3_1$V2_2 +5
+
+aug_gain3_1$seq <- as.character(Biostrings::getSeq(BSgenome.Hsapiens.UCSC.hg38, aug_gain3_1$V2_1, aug_gain3_1$start, aug_gain3_1$end)) 
+#this is sequence around the variant that create a ATG. i want to see if its immediately followed by a stop.
+#remember to double check they are within 5UTRs
+five <- read.table("utr_info.txt")
+
+five <- cSplit(five, "gene_id", ".")
+five <- subset(five, select=-c(total_exons, gene_id_2))
+names(five)[4]<-"gene_id"
+names(aug_gain3_1)[3]<-"gene_id"
+auggain3 <- merge(aug_gain3_1, five, by="gene_id")
+g3_pos <- auggain3 %>% filter(strand=="+")
+#none are start stops
+g3_neg <- auggain3 %>% filter(strand=="-")
+#rev complement
+
+
+library(seqinr)
+for(j in 1:length(g3_neg$seq)){
+  g3_neg$rev[j]<-c2s(rev(comp(s2c(g3_neg$seq[j]))))
+}
+
+#check the one iwth the range
+gain_range <-  aug_gain3 %>% filter(grepl("-", V2_2))
+gain_range <- cSplit(gain_range, "V2_2", "-")
+gain_range$V2_1 <- paste0("chr", gain_range$V2_1)
+gain_range$start <- gain_range$V2_2_1 - 5
+gain_range$end <- gain_range$V2_2_1 + 5
+#its pos strand
+gain_range$seq <- as.character(Biostrings::getSeq(BSgenome.Hsapiens.UCSC.hg38, gain_range$V2_1, gain_range$start, gain_range$end)) 
+
+
+# C C G C C     the 21 sequenceis inserted here - does the G  in the middle disappear? CCATGCCCACGGCCGCCGCCC   C C A T G
+#so the atg is inserted but not creating a start stop irrespective of the G in middle bec tehre are only G and Cs around..
+# i think its actually a duplication so now u have extra ATG
+######summary aug gain######
+#df aug_gain has 13 which are aug gains which create a start-stop
+#write.table(aug_gain, "auggain_ss.txt")
+
+
+#################2. aug lost ####
+uAUG_lost <- clinvar %>% filter(grepl("uAUG_lost", V25))#855
+aug_lost2 <- uAUG_lost %>% filter(grepl("uAUG_lost_DistanceToStop:3,", V24))
+#keep unique as they all are the same outcomes i think
+auglost2 <- aug_lost2 %>% distinct(V2, .keep_all = TRUE)#5
+
+#look at those which dis to stop is na
+lost_na <- uAUG_lost %>% filter(grepl("uAUG_lost_DistanceToStop:NA,", V24))#26
+#keep unique
+lost_na2 <- lost_na %>% distinct(V2, .keep_all = TRUE)#7
+#need to pull sequences to see if the atg lost immediately preceeds a stop codon
+names(lost_na2)[4]<-"gene_id"
+
+#merge with mane to get strand
+lost_mane <- merge(lost_na2, five, by="gene_id")
+#get it ready to pull seqs
+lost_mane <- cSplit(lost_mane, "V2", ":")
+
+lost_pos <- lost_mane %>% filter(strand=="+")
+
+
+lost_pos$V2_1 <- paste0("chr", lost_pos$V2_1)
+lost_pos$start <- lost_pos$V2_2 - 5
+lost_pos$end <- lost_pos$V2_2 + 5
+#its pos strand
+lost_pos$seq <- as.character(Biostrings::getSeq(BSgenome.Hsapiens.UCSC.hg38, lost_pos$V2_1, lost_pos$start, lost_pos$end)) 
+#no start stops, but 1047852 is interesting theres a row of starts so pull more?
+lost_pos$end <- lost_pos$V2_2 + 10
+lost_pos$seq <- as.character(Biostrings::getSeq(BSgenome.Hsapiens.UCSC.hg38, lost_pos$V2_1, lost_pos$start, lost_pos$end)) 
+#its 2 atgs and a third is the cds start
+
+#neg now
+lost_neg <- lost_mane %>% filter(strand=="-")
+lost_neg$V2_1 <- paste0("chr", lost_neg$V2_1)
+lost_neg$start <- lost_neg$V2_2 - 5
+lost_neg$end <- lost_neg$V2_2 + 5
+
+lost_neg$seq <- as.character(Biostrings::getSeq(BSgenome.Hsapiens.UCSC.hg38, lost_neg$V2_1, lost_neg$start, lost_neg$end)) 
+
+for(q in 1:length(lost_neg$seq)){
+  lost_neg$rev[q]<-c2s(rev(comp(s2c(lost_neg$seq[q]))))
+}
+
+#auglost2 has 5
+#write.table(auglost2, "auglost_ss.txt")
+
+###3. uSTOP lost - where the uorf stop lost is actually a ss stop lost ####
+
+#remember in these cases its looking at existing uorf/oorf where the stop is lost, so its turning them into soemthing else. wrt  to ss, its becoming a uorf or oorf
+
+uSTOP_lost <- clinvar %>% filter(grepl("uSTOP_lost", V25))#351
+#need to pull immedate 3 bases befre the stop lost to see if its an atg
+
+stop_lost <- uSTOP_lost %>% distinct(V2, .keep_all = TRUE)#78
+#merge with mane to get strands
+names(stop_lost)[4]<-"gene_id"
+stop_mane <- merge(five, stop_lost, by="gene_id")
+
+#get coords ready for pulling
+stop_mane <- cSplit(stop_mane, "V2", ":")
+stop_mane$V2_1 <- paste0("chr", stop_mane$V2_1)
+#filter out ranges
+stop_mane2<-  stop_mane %>% filter(!grepl("-", V2_2))
+
+
+stop_mane2$V2_2 <- as.character(stop_mane2$V2_2)
+stop_mane2$V2_2 <- as.numeric(stop_mane2$V2_2)
+stop_mane2$start <- stop_mane2$V2_2 - 5
+stop_mane2$end <- stop_mane2$V2_2 + 5
+
+#pos
+stop_pos <- stop_mane2 %>% filter(strand=="+")
+
+stop_pos$seq <- as.character(Biostrings::getSeq(BSgenome.Hsapiens.UCSC.hg38, stop_pos$V2_1, stop_pos$start, stop_pos$end))
+
+#these are where the stop i slost, need to look immediately before the stop if its an atg
+#get those with an ATG in
+stop_atg <- stop_pos %>% filter(grepl("ATG", seq))
+stop_atg$sub <- str_sub(stop_atg$seq, start = 1, end = 5)
+stopatg2 <- stop_atg  %>% filter(grepl("ATG", sub)) ## <--- this one
+
+#neg
+stop_neg <- stop_mane2 %>% filter(strand=="-")#29
+stop_neg$seq <- as.character(Biostrings::getSeq(BSgenome.Hsapiens.UCSC.hg38, stop_neg$V2_1, stop_neg$start, stop_neg$end))
+
+for(w in 1:length(stop_neg$seq)){
+  stop_neg$rev[w]<-c2s(rev(comp(s2c(stop_neg$seq[w]))))
+}
+
+stop_neg$sub <- str_sub(stop_neg$rev, start = 1, end = 4)
+stopneg2 <- stop_neg  %>% filter(grepl("atg", sub)) ## <--- this one
+
+#deal with ranges
+stop_ran<-  stop_mane %>% filter(grepl("-", V2_2))
+
+stop_ran2 <- cSplit(stop_ran, "V2_2", "-")
+stop_ran2$V2_2_1 <- as.character(stop_ran2$V2_2_1)
+stop_ran2$V2_2_1 <- as.numeric(stop_ran2$V2_2_1)
+stop_ran2$V2_2_2 <- as.character(stop_ran2$V2_2_2)
+stop_ran2$V2_2_2 <- as.numeric(stop_ran2$V2_2_2)
+
+stop_ran2$start <- stop_ran2$V2_2_1 - 5
+stop_ran2$end <- stop_ran2$V2_2_2 + 5
+
+stop_ran2$seq <- as.character(Biostrings::getSeq(BSgenome.Hsapiens.UCSC.hg38, stop_ran2$V2_1, stop_ran2$start, stop_ran2$end))
+#none are start stops
+
+#stop loss where its an atg
+stopneg3 <- subset(stopneg2 , select=-c(rev))
+stoploss_final <- rbind(stopatg2, stopneg3)
+#write.table(stoploss_final, "stoploss.txt")
+
+
+
+############4. uSTOP GAIN#########
+#essentially shorting an existing uorf or oorf turning it into a start stop is what im after
+
+uSTOP_gain <- clinvar %>% filter(grepl("uSTOP_gain", V25))#327
+
+stop_gain <- uSTOP_gain %>% distinct(V2, .keep_all = TRUE)#111
+#merge with mane to get strands
+names(stop_gain)[4]<-"gene_id"
+stop_mane <- merge(five, stop_gain, by="gene_id")
+
+
+#get coords ready for pulling
+stop_mane <- cSplit(stop_mane, "V2", ":")
+stop_mane$V2_1 <- paste0("chr", stop_mane$V2_1)
+#filter out ranges
+stop_mane2<-  stop_mane %>% filter(!grepl("-", V2_2))
+
+
+stop_mane2$V2_2 <- as.character(stop_mane2$V2_2)
+stop_mane2$V2_2 <- as.numeric(stop_mane2$V2_2)
+stop_mane2$start <- stop_mane2$V2_2 - 5
+stop_mane2$end <- stop_mane2$V2_2 + 5
+
+stop_mane2$seq <- as.character(Biostrings::getSeq(BSgenome.Hsapiens.UCSC.hg38, stop_mane2$V2_1, stop_mane2$start, stop_mane2$end))
+
+#pos
+stop_pos <- stop_mane2 %>% filter(strand=="+")
+
+#look if upstream to gain variant has an atg
+stop_pos$sub <- str_sub(stop_pos$seq, start = 1, end = 5)
+stoppos2 <- stop_pos  %>% filter(grepl("ATG", sub)) #3# <--- this one
+
+stop_neg_gai <- stop_mane2 %>% filter(strand=="-")
+
+for(w in 1:length(stop_neg_gai$seq)){
+  stop_neg_gai$rev[w]<-c2s(rev(comp(s2c(stop_neg_gai$seq[w]))))
+}
+
+stop_neg_gai$sub <- str_sub(stop_neg_gai$rev, start = 1, end = 5)
+stop_neg_gai2 <- stop_neg_gai  %>% filter(grepl("atg", sub)) #3# <--- this one
+
+#ranges
+stop_gain_ran<-  stop_mane %>% filter(grepl("-", V2_2))#2
+
+stop_gain_ran2 <- cSplit(stop_gain_ran, "V2_2", "-")
+stop_gain_ran2$V2_2_1 <- as.character(stop_gain_ran2$V2_2_1)
+stop_gain_ran2$V2_2_1 <- as.numeric(stop_gain_ran2$V2_2_1)
+stop_gain_ran2$V2_2_2 <- as.character(stop_gain_ran2$V2_2_2)
+stop_gain_ran2$V2_2_2 <- as.numeric(stop_gain_ran2$V2_2_2)
+
+stop_gain_ran2$start <- stop_gain_ran2$V2_2_1 - 5
+stop_gain_ran2$end <- stop_gain_ran2$V2_2_2 + 5
+
+stop_gain_ran2$seq <- as.character(Biostrings::getSeq(BSgenome.Hsapiens.UCSC.hg38, stop_gain_ran2$V2_1, stop_gain_ran2$start, stop_gain_ran2$end))
+
+#no atgs in sight
+
+#stop gain that create a ss
+stoppos2
+stop_neg_gai2
+
+
+stopga3 <- subset(stop_neg_gai2 , select=-c(rev))
+stopgain_final <- rbind(stopga3, stoppos2)
+#write.table(stopgain_final, "stopgain.txt")
+
+
+#this is waht clinvar said about them 
+#1049175 vus but no extra info - chops out a small chunk of 5utr  and bigger bit of cds, highly doubt ss relted
+#917935 likely path for Nephronophthisis 19 but no other info - look carefully into this one var_pos = 24357458-24357528 - https://www.ncbi.nlm.nih.gov/clinvar/variation/917935/?oq=917935&m=NM_016356.5(DCDC2):c.223_293del%20(p.Arg75fs)
+#420352 likely benign no other info -removes a TAG but not a start beffr it so not ss
+#280305 pathogenic https://www.ncbi.nlm.nih.gov/clinvar/variation/280305/?oq=280305&m=NM_001004127.3(ALG11):c.1123_1126del%20(p.Asn375fs) can see TAA but not aTG befr
+
+#uAUG gain 
+#335468 - VUS, Illumina
+#895732 - VUS, Illumina
+#516637 - likely beingn, GDex, no disease submitted
+#346673 - VUS, Illumina
+#342794 - Uncertain significance(3); Benign(1) illumina, no func work
+#702917 - likely benign invitae, fanconi anaemia, no func work
+#364053 - VUS, Illumina
+#880415 - VUS, Illumina
+#881904 - VUS, Illumina
+#882233 - VUS, Illumina
+#316196 - likely benign, Illumina
+#887850 - VUS fanconi anaemia -  fulgent - ffanci  https://www.ncbi.nlm.nih.gov/clinvar/variation/887850/?oq=887850&m=NM_001113378.2(FANCI):c.-10A%3EG
+#A uAUG gain was classed as VUS for Fanconi Anaemia complementation group I. In FANCI, turns an oORF into a start stop 
+#where the sequence is ATATGAGC >> ATGTGAGC
+#short 5utr decile 6. Recessive
+#Weak oorf ~7bps from CDS to a medium start stop
+
+#323525 - Uncertain significance(1) mayo clinic no disease; Benign(1); Likely benign(2) both illumina
+(13)
+
+#uaug lost
+#383907 - liely benign no info GeneDx, but interesting funcitonal work shows it Significant log2 change in mean ribosome load, https://www.ncbi.nlm.nih.gov/clinvar/variation/383907/?oq=383907&m=NM_025150.5(TARS2):c.-22G%3EA
+#894402 - Uncertain significance(1); Benign(1); Likely benign(1) , all illumina no extra info
+#895356 - VUS, Illumina
+#901330  - VUS, Illumina
+#310317- VUS, Illumina
+(5)
+#ustop_lost
+#354386 - VUS, Illumina
+#904784 - VUS, Illumina
+#346938- VUS, Illumina
+#1001180 - VUS for Familial adenomatous polyposis 2, invitae, https://www.ncbi.nlm.nih.gov/clinvar/variation/1001180/?oq=1001180&m=NM_025077.4(TOE1):c.-2T%3EG
+#1223274  - benign GeneDX, no other info added/no disease name
+#300207 - VUS, Illumina
+(6)
+#ustop_gain (just the pos, need to check neg)
+#873589  - VUS, Illumina
+#891674 - VUS, Illumina
+#343901 - Pathogenic(1) ; Uncertain significance(1) both for Biotinidase deficiency, illumina and 2 other labs. teh pathogenic one gives no other info https://www.ncbi.nlm.nih.gov/clinvar/variation/343901/?oq=343901&m=NM_001370658.1(BTD):c.-148C%3ET
+#the VUS with more info wrote:
+ # Loss of function variants of the BTD gene are an established mechanism of disease in biotinidase deficiency and, in the homozygous or compound heterozygous state, are the type of variant expected to cause the disorder. However, on other BTD transcripts, such as NM_000060, this variant is found within the 5' UTR and therefore would not be expected to cause loss of function. In summary, based on the above information the clinical significance of this variant cannot be determined with certainty at this time. This variant is classified as a variant of uncertain significance.
+#btd, decile 8, dd recessive, hard for me to tell what of the native 3 uaugs its turning into uorf.
+
+```
+
+
+
